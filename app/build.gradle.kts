@@ -27,8 +27,20 @@ android {
         buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
     }
 
+    // Release aláírás környezeti változókból (CI-ban GitHub secretekből); a kulcs nincs a repóban.
+    val keystoreFile = providers.environmentVariable("CARTINDER_KEYSTORE_FILE").orNull
+    val releaseSigning = keystoreFile?.let {
+        signingConfigs.create("release") {
+            storeFile = file(it)
+            storePassword = providers.environmentVariable("CARTINDER_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("CARTINDER_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("CARTINDER_KEY_PASSWORD").get()
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = releaseSigning
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
