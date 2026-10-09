@@ -15,49 +15,98 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import hu.zoltanegyhazi.cartinder.ui.AuthScreen
 import hu.zoltanegyhazi.cartinder.ui.ChatScreen
 import hu.zoltanegyhazi.cartinder.ui.DiscoverScreen
+import hu.zoltanegyhazi.cartinder.ui.ListingEditorScreen
+import hu.zoltanegyhazi.cartinder.ui.LocalServerUrl
 import hu.zoltanegyhazi.cartinder.ui.Logo
 import hu.zoltanegyhazi.cartinder.ui.MatchOverlay
 import hu.zoltanegyhazi.cartinder.ui.MatchesScreen
 import hu.zoltanegyhazi.cartinder.ui.ProfileScreen
+import hu.zoltanegyhazi.cartinder.ui.rememberLocalNetworkGate
 import hu.zoltanegyhazi.cartinder.ui.theme.CarTInderTheme
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val factory = (application as CarTinderApplication).viewModelFactory
         setContent {
             CarTInderTheme {
-                CarTInderApp()
+                CarTInderApp(viewModel(factory = factory))
             }
         }
     }
 }
 
 @Composable
-fun CarTInderApp(viewModel: CarTinderViewModel = viewModel()) {
-    val state = viewModel.state
-    if (state == null) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
-            Logo()
+fun CarTInderApp(vm: CarTinderViewModel) {
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(vm.notice) {
+        vm.notice?.let {
+            vm.notice = null
+            snackbar.showSnackbar(it)
         }
-        return
     }
-    var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.DISCOVER) }
-    var chatCarId by rememberSaveable { mutableStateOf<Int?>(null) }
+
+    // Mentett belépésnél, helyi szerverrel: engedély kérése, majd újrapróbálás.
+    val localNetworkGate = rememberLocalNetworkGate()
+    LaunchedEffect(Unit) {
+        if (vm.hasSavedLogin) localNetworkGate(vm.serverUrl) { vm.retrySavedLogin() }
+    }
+
+    CompositionLocalProvider(LocalServerUrl provides vm.serverUrl) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            when (vm.state) {
+                Session.Loading -> Logo(Modifier.align(Alignment.Center))
+                Session.LoggedOut -> Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+                    AuthScreen(vm, Modifier.padding(padding))
+                }
+                is Session.LoggedIn -> MainContent(vm, snackbar)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MainContent(vm: CarTinderViewModel, snackbar: SnackbarHostState) {
+    var destination by rememberSaveable { mutableStateOf(AppDestinations.DISCOVER) }
+    var chatId by rememberSaveable { mutableStateOf<Int?>(null) }
+    // null: nincs nyitva, -1: új hirdetés, egyébként a szerkesztett hirdetés azonosítója
+    var editingListingId by rememberSaveable { mutableStateOf<Int?>(null) }
+
+    // Matchek, kedvelések és új üzenetek frissítése, amíg az app előtérben van.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                vm.refreshInbox()
+                delay(8_000)
+            }
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         NavigationSuiteScaffold(
@@ -65,55 +114,66 @@ fun CarTInderApp(viewModel: CarTinderViewModel = viewModel()) {
                 AppDestinations.entries.forEach {
                     item(
                         icon = {
-                            val count = state.matches.size
-                            if (it == AppDestinations.MATCHES && count > 0) {
-                                BadgedBox(badge = { Badge { Text("$count") } }) {
-                                    Icon(painterResource(it.icon), contentDescription = it.label, modifier = Modifier.size(24.dp))
-                                }
-                            } else {
+                            val count = when (it) {
+                                AppDestinations.MATCHES -> vm.matches.sumOf { m -> m.unread } + vm.likes.size
+                                else -> 0
+                            }
+                            BadgedBox(badge = { if (count > 0) Badge { Text("$count") } }) {
                                 Icon(painterResource(it.icon), contentDescription = it.label, modifier = Modifier.size(24.dp))
                             }
                         },
                         label = { Text(it.label) },
-                        selected = it == currentDestination,
-                        onClick = { currentDestination = it }
+                        selected = it == destination,
+                        onClick = { destination = it },
                     )
                 }
             }
         ) {
-            Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+            Scaffold(modifier = Modifier.fillMaxSize(), snackbarHost = { SnackbarHost(snackbar) }) { innerPadding ->
                 val modifier = Modifier.padding(innerPadding)
-                when (currentDestination) {
+                when (destination) {
                     AppDestinations.DISCOVER -> DiscoverScreen(
-                        state,
-                        onOpenProfile = { currentDestination = AppDestinations.PROFILE },
+                        vm,
+                        onOpenProfile = { destination = AppDestinations.PROFILE },
                         modifier = modifier,
                     )
-                    AppDestinations.MATCHES -> MatchesScreen(state, onOpenChat = { chatCarId = it }, modifier = modifier)
-                    AppDestinations.PROFILE -> ProfileScreen(state, modifier)
+                    AppDestinations.MATCHES -> MatchesScreen(vm, onOpenChat = { chatId = it }, modifier = modifier)
+                    AppDestinations.PROFILE -> ProfileScreen(
+                        vm,
+                        onEditListing = { editingListingId = it ?: -1 },
+                        modifier = modifier,
+                    )
                 }
             }
         }
 
-        state.matches.firstOrNull { it.car.id == chatCarId }?.let { match ->
+        vm.matches.firstOrNull { it.id == chatId }?.let { match ->
             ChatScreen(
-                state,
+                vm,
                 match,
-                onSend = viewModel::sendMessage,
-                onBack = { chatCarId = null },
+                onBack = { chatId = null },
                 modifier = Modifier.background(MaterialTheme.colorScheme.background),
             )
         }
 
-        state.pendingMatch?.let { match ->
+        editingListingId?.let { id ->
+            ListingEditorScreen(
+                vm,
+                listing = vm.myListings.firstOrNull { it.id == id },
+                onClose = { editingListingId = null },
+                modifier = Modifier.background(MaterialTheme.colorScheme.background),
+            )
+        }
+
+        vm.pendingMatch?.let { match ->
             MatchOverlay(
                 match = match,
                 onMessage = {
-                    state.pendingMatch = null
-                    currentDestination = AppDestinations.MATCHES
-                    chatCarId = match.car.id
+                    vm.pendingMatch = null
+                    destination = AppDestinations.MATCHES
+                    chatId = match.id
                 },
-                onDismiss = { state.pendingMatch = null },
+                onDismiss = { vm.pendingMatch = null },
             )
         }
     }

@@ -23,8 +23,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,18 +42,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import hu.zoltanegyhazi.cartinder.data.AppState
-import hu.zoltanegyhazi.cartinder.data.Car
-import hu.zoltanegyhazi.cartinder.data.Match
+import hu.zoltanegyhazi.cartinder.CarTinderViewModel
+import hu.zoltanegyhazi.cartinder.data.api.IncomingLikeDto
+import hu.zoltanegyhazi.cartinder.data.api.ListingDto
+import hu.zoltanegyhazi.cartinder.data.api.MatchDto
+import hu.zoltanegyhazi.cartinder.data.api.Role
 import hu.zoltanegyhazi.cartinder.data.formatHuf
 import hu.zoltanegyhazi.cartinder.data.formatKm
+import hu.zoltanegyhazi.cartinder.data.title
 import hu.zoltanegyhazi.cartinder.ui.theme.SuperBlue
 
 @Composable
-fun MatchesScreen(state: AppState, onOpenChat: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val matches = state.matches
+fun MatchesScreen(vm: CarTinderViewModel, onOpenChat: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val matches = vm.matches
+    val likes = vm.likes
 
-    if (matches.isEmpty()) {
+    if (matches.isEmpty() && likes.isEmpty()) {
         Column(
             modifier.fillMaxSize().padding(32.dp),
             verticalArrangement = Arrangement.Center,
@@ -59,7 +67,7 @@ fun MatchesScreen(state: AppState, onOpenChat: (Int) -> Unit, modifier: Modifier
             Spacer(Modifier.height(12.dp))
             Text("Még nincs match", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
-                "Húzz jobbra pár autót a Felfedezés fülön!",
+                "Húzz jobbra pár autót a Felfedezés fülön, vagy adj fel egy hirdetést a Profil fülön!",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -69,59 +77,47 @@ fun MatchesScreen(state: AppState, onOpenChat: (Int) -> Unit, modifier: Modifier
     }
 
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 16.dp)) {
-        item {
-            SectionTitle("Új matchek")
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(matches, key = { it.car.id }) { match ->
-                    Column(
-                        Modifier.width(84.dp).clickable { onOpenChat(match.car.id) },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        CarAvatar(match, 76.dp)
-                        Text(
-                            match.car.make,
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+        if (likes.isNotEmpty()) {
+            item { SectionTitle("Érdeklődők a hirdetéseidre (${likes.size})") }
+            items(likes, key = { "like-${it.id}" }) { like ->
+                IncomingLikeRow(like, onAccept = { vm.acceptLike(like) }, onDecline = { vm.declineLike(like) })
+            }
+            item { Spacer(Modifier.height(8.dp)) }
+        }
+
+        val fresh = matches.filter { it.lastMessage == null || it.lastMessage.fromMe.not() && it.unread > 0 }
+        if (fresh.isNotEmpty()) {
+            item {
+                SectionTitle("Új matchek")
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(fresh, key = { "new-${it.id}" }) { match ->
+                        Column(
+                            Modifier.width(84.dp).clickable { onOpenChat(match.id) },
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            MatchAvatar(match, 76.dp)
+                            Text(
+                                if (match.role == Role.BUYER) match.listing.make else match.other.name,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
+                Spacer(Modifier.height(16.dp))
             }
-            Spacer(Modifier.height(16.dp))
-            SectionTitle("Üzenetek")
         }
-        items(matches, key = { "msg-${it.car.id}" }) { match ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenChat(match.car.id) }
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CarAvatar(match, 60.dp)
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(match.car.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    val last = state.messages(match.car.id).lastOrNull()
-                    Text(
-                        when {
-                            state.isTyping(match.car.id) -> "gépel…"
-                            last == null -> "Írj neki először!"
-                            last.fromMe -> "Te: ${last.text}"
-                            else -> last.text
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (last?.fromMe == false) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = if (last?.fromMe == false) FontWeight.Medium else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+
+        if (matches.isNotEmpty()) {
+            item { SectionTitle("Üzenetek") }
+            items(matches, key = { "msg-${it.id}" }) { match ->
+                ConversationRow(match, isTyping = vm.isTyping(match.id), onClick = { onOpenChat(match.id) })
+                HorizontalDivider(Modifier.padding(start = 90.dp))
             }
-            HorizontalDivider(Modifier.padding(start = 90.dp))
         }
     }
 }
@@ -138,9 +134,106 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-fun CarAvatar(match: Match, size: Dp) {
+private fun IncomingLikeRow(like: IncomingLikeDto, onAccept: () -> Unit, onDecline: () -> Unit) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            CarPhoto(like.listing, Modifier.size(56.dp).clip(CircleShape), placeholderPadding = 4.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    buildString {
+                        append(like.buyer.name)
+                        if (like.superLike) append(" ★")
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (like.superLike) SuperBlue else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "${if (like.superLike) "Szuper like" else "Tetszik neki"}: ${like.listing.title}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val about = listOf(like.buyer.city, like.buyer.currentCar.takeIf { it.isNotBlank() }?.let { "most: $it" })
+                    .filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
+                if (about.isNotEmpty()) {
+                    Text(about, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        ) {
+            OutlinedButton(onClick = onDecline) { Text("Elutasít") }
+            FilledTonalButton(onClick = onAccept) { Text("Elfogad") }
+        }
+    }
+}
+
+@Composable
+private fun ConversationRow(match: MatchDto, isTyping: Boolean, onClick: () -> Unit) {
+    val last = match.lastMessage
+    val unread = match.unread > 0
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MatchAvatar(match, 60.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    match.chatTitle,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    formatMessageTime(last?.createdAt ?: match.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        isTyping -> "gépel…"
+                        last == null -> "Írj neki először!"
+                        last.fromMe -> "Te: ${last.text}"
+                        else -> last.text
+                    },
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = when {
+                        isTyping -> MaterialTheme.colorScheme.primary
+                        unread -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (unread) {
+                    Spacer(Modifier.width(8.dp))
+                    Badge { Text("${match.unread}") }
+                }
+            }
+        }
+    }
+}
+
+/** Vevőként az autó, eladóként a vevő neve a beszélgetés címe. */
+val MatchDto.chatTitle get() = if (role == Role.BUYER) listing.title else "${other.name} · ${listing.make}"
+
+@Composable
+fun MatchAvatar(match: MatchDto, size: Dp) {
     Box {
-        CarPhoto(match.car, Modifier.size(size).clip(CircleShape), placeholderPadding = 6.dp)
+        CarPhoto(match.listing, Modifier.size(size).clip(CircleShape), placeholderPadding = 6.dp)
         if (match.superLike) {
             Text(
                 "★",
@@ -157,48 +250,53 @@ fun CarAvatar(match: Match, size: Dp) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CarDetailDialog(car: Car, onDismiss: () -> Unit, onUnmatch: () -> Unit) {
+fun ListingDetailDialog(
+    listing: ListingDto,
+    onDismiss: () -> Unit,
+    destructiveLabel: String? = null,
+    onDestructive: () -> Unit = {},
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${car.title}, ${car.year}") },
+        title = { Text("${listing.title}, ${listing.year}") },
         text = {
             Column {
                 CarPhoto(
-                    car,
+                    listing,
                     Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(16.dp)),
                     placeholderPadding = 12.dp,
+                    showCredit = true,
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    formatHuf(car.priceHuf),
+                    formatHuf(listing.priceHuf),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SpecChip(formatKm(car.km))
-                    SpecChip("${car.horsepower} LE")
-                    SpecChip(car.fuel.label)
-                    SpecChip(car.body.label)
-                    SpecChip("📍 ${car.city}")
+                    SpecChip(formatKm(listing.km))
+                    SpecChip("${listing.horsepower} LE")
+                    SpecChip(listing.fuel.label)
+                    SpecChip(listing.body.label)
+                    SpecChip("📍 ${listing.city}")
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(car.bio, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(12.dp))
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                        .padding(12.dp),
-                ) {
-                    Text(car.opener, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                if (listing.bio.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(listing.bio, style = MaterialTheme.typography.bodyMedium)
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Eladó: ${listing.sellerName}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Bezár") } },
-        dismissButton = {
-            TextButton(onClick = onUnmatch) { Text("Unmatch", color = MaterialTheme.colorScheme.error) }
+        dismissButton = destructiveLabel?.let {
+            { TextButton(onClick = onDestructive) { Text(it, color = MaterialTheme.colorScheme.error) } }
         },
     )
 }
