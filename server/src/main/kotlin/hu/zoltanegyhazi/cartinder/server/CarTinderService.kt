@@ -12,6 +12,7 @@ import org.jetbrains.exposed.v1.core.lessEq
 import org.jetbrains.exposed.v1.core.neq
 import org.jetbrains.exposed.v1.core.notInSubQuery
 import org.jetbrains.exposed.v1.core.or
+import org.jetbrains.exposed.v1.core.statements.UpdateBuilder
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.andWhere
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
@@ -314,7 +315,8 @@ class CarTinderService(
         validate(req)
         return db.query {
             ownedListing(userId, listingId)
-            Listings.update({ Listings.id eq listingId }) { it.fill(req) }
+            // Szerkesztéskor az üres nyitóüzenet a korábbit hagyja meg.
+            Listings.update({ Listings.id eq listingId }) { it.fill(req, keepOpenerIfBlank = true) }
             findListing(listingId)!!.toDto()
         }
     }
@@ -442,7 +444,7 @@ class CarTinderService(
     }
 }
 
-private fun org.jetbrains.exposed.v1.core.statements.UpdateBuilder<*>.fill(req: ListingRequest) {
+private fun UpdateBuilder<*>.fill(req: ListingRequest, keepOpenerIfBlank: Boolean = false) {
     this[Listings.make] = req.make.trim()
     this[Listings.model] = req.model.trim()
     this[Listings.year] = req.year
@@ -453,7 +455,7 @@ private fun org.jetbrains.exposed.v1.core.statements.UpdateBuilder<*>.fill(req: 
     this[Listings.body] = req.body.name
     this[Listings.city] = req.city.trim()
     this[Listings.bio] = req.bio.trim()
-    this[Listings.opener] = req.opener.trim()
+    if (!keepOpenerIfBlank || req.opener.isNotBlank()) this[Listings.opener] = req.opener.trim()
     this[Listings.active] = req.active
 }
 

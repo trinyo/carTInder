@@ -27,6 +27,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -34,8 +35,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,33 +51,57 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import hu.zoltanegyhazi.cartinder.CarTinderViewModel
 import hu.zoltanegyhazi.cartinder.R
-import hu.zoltanegyhazi.cartinder.data.AppState
-import hu.zoltanegyhazi.cartinder.data.Car
-import hu.zoltanegyhazi.cartinder.data.Match
-import hu.zoltanegyhazi.cartinder.data.Message
+import hu.zoltanegyhazi.cartinder.data.api.MatchDto
+import hu.zoltanegyhazi.cartinder.data.api.MessageDto
+import hu.zoltanegyhazi.cartinder.data.api.Role
+import hu.zoltanegyhazi.cartinder.data.title
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    state: AppState,
-    match: Match,
-    onSend: (Car, String) -> Unit,
+    vm: CarTinderViewModel,
+    match: MatchDto,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val car = match.car
-    val messages = state.messages(car.id)
-    val typing = state.isTyping(car.id)
-    var draft by rememberSaveable(car.id) { mutableStateOf("") }
+    val listing = match.listing
+    val messages = vm.messages(match.id)
+    val typing = vm.isTyping(match.id)
+    var draft by rememberSaveable(match.id) { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
     var showDetails by rememberSaveable { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     BackHandler(onBack = onBack)
 
-    val send = {
-        if (draft.isNotBlank()) {
-            onSend(car, draft)
+    // Amíg a chat előtérben van, két másodpercenként frissít.
+    LaunchedEffect(match.id) {
+        vm.openThread(match.id)
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                delay(2_000)
+                vm.syncThread(match.id)
+            }
+        }
+    }
+
+    val send: () -> Unit = {
+        val text = draft.trim()
+        if (text.isNotEmpty() && !sending) {
+            sending = true
             draft = ""
+            scope.launch {
+                if (!vm.send(match.id, text)) draft = text
+                sending = false
+            }
         }
     }
 
@@ -88,12 +116,16 @@ fun ChatScreen(
                 },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CarAvatar(match, 40.dp)
+                        MatchAvatar(match, 40.dp)
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text(car.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                            Text(match.chatTitle, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                             Text(
-                                if (typing) "gépel…" else "${car.city} · ${car.year}",
+                                when {
+                                    typing -> "gépel…"
+                                    match.role == Role.BUYER -> "Eladó: ${match.other.name} · ${listing.city}"
+                                    else -> "Érdeklődik: ${listing.title}"
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (typing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -128,7 +160,7 @@ fun ChatScreen(
                         keyboardActions = KeyboardActions(onSend = { send() }),
                     )
                     Spacer(Modifier.width(8.dp))
-                    FilledIconButton(onClick = send, enabled = draft.isNotBlank()) {
+                    FilledIconButton(onClick = send, enabled = draft.isNotBlank() && !sending) {
                         Icon(painterResource(R.drawable.ic_send), "Küldés")
                     }
                 }
@@ -144,12 +176,19 @@ fun ChatScreen(
             if (typing) {
                 item(key = "typing") { Bubble("• • •", fromMe = false, italic = true) }
             }
-            items(messages.asReversed(), key = { "${it.sentAt}-${it.fromMe}-${it.text.hashCode()}" }) { message ->
+            items(messages.asReversed(), key = { it.id }) { message ->
                 Bubble(message)
             }
             item(key = "header") {
                 Text(
-                    "Matcheltetek ${car.title} autóval${if (match.superLike) " – szuper like-kal! ★" else "."}",
+                    buildString {
+                        append("Match: ")
+                        append(formatMessageTime(match.createdAt))
+                        if (match.superLike) append(" · szuper like ★")
+                        if (match.role == Role.SELLER && match.other.currentCar.isNotBlank()) {
+                            append("\n${match.other.name} most ezzel jár: ${match.other.currentCar}")
+                        }
+                    },
                     Modifier.fillMaxWidth().padding(vertical = 16.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -160,12 +199,13 @@ fun ChatScreen(
     }
 
     if (showDetails) {
-        CarDetailDialog(
-            car = car,
+        ListingDetailDialog(
+            listing = listing,
             onDismiss = { showDetails = false },
-            onUnmatch = {
+            destructiveLabel = "Unmatch",
+            onDestructive = {
                 showDetails = false
-                state.unmatch(car)
+                vm.unmatch(match)
                 onBack()
             },
         )
@@ -173,10 +213,10 @@ fun ChatScreen(
 }
 
 @Composable
-private fun Bubble(message: Message) = Bubble(message.text, message.fromMe)
+private fun Bubble(message: MessageDto) = Bubble(message.text, message.fromMe, time = formatMessageTime(message.createdAt))
 
 @Composable
-private fun Bubble(text: String, fromMe: Boolean, italic: Boolean = false) {
+private fun Bubble(text: String, fromMe: Boolean, italic: Boolean = false, time: String? = null) {
     Box(Modifier.fillMaxWidth(), contentAlignment = if (fromMe) Alignment.CenterEnd else Alignment.CenterStart) {
         Surface(
             shape = if (fromMe) {
@@ -188,12 +228,21 @@ private fun Bubble(text: String, fromMe: Boolean, italic: Boolean = false) {
             contentColor = if (fromMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.widthIn(max = 300.dp),
         ) {
-            Text(
-                text,
-                Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
-                fontWeight = if (italic) FontWeight.Bold else FontWeight.Normal,
-            )
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text(
+                    text,
+                    fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+                    fontWeight = if (italic) FontWeight.Bold else FontWeight.Normal,
+                )
+                if (time != null) {
+                    Text(
+                        time,
+                        Modifier.align(Alignment.End),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LocalContentColor.current.copy(alpha = 0.7f),
+                    )
+                }
+            }
         }
     }
 }

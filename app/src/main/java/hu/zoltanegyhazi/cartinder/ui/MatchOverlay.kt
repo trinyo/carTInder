@@ -35,10 +35,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import hu.zoltanegyhazi.cartinder.data.Match
+import hu.zoltanegyhazi.cartinder.data.api.MatchDto
+import hu.zoltanegyhazi.cartinder.data.title
 
 @Composable
-fun MatchOverlay(match: Match, onMessage: () -> Unit, onDismiss: () -> Unit) {
+fun MatchOverlay(match: MatchDto, onMessage: () -> Unit, onDismiss: () -> Unit) {
     val scale = remember(match) { Animatable(0.6f) }
     LaunchedEffect(match) { scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
 
@@ -64,18 +65,20 @@ fun MatchOverlay(match: Match, onMessage: () -> Unit, onDismiss: () -> Unit) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Te és ${match.car.title} kedvelitek egymást.",
+                "Te és ${match.listing.title} kedvelitek egymást.",
                 color = Color.White,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(24.dp))
             CarPhoto(
-                match.car,
+                match.listing,
                 Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(24.dp)),
                 placeholderPadding = 20.dp,
             )
             Spacer(Modifier.height(16.dp))
-            Text("„${match.car.opener}”", color = Color.White, fontSize = 16.sp, textAlign = TextAlign.Center)
+            match.lastMessage?.let {
+                Text("„${it.text}”", color = Color.White, fontSize = 16.sp, textAlign = TextAlign.Center)
+            }
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = onMessage,
