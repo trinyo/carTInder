@@ -2,6 +2,7 @@ package hu.zoltanegyhazi.cartinder.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -15,7 +16,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import hu.zoltanegyhazi.cartinder.data.BodyType
-import hu.zoltanegyhazi.cartinder.data.Car
 
 /** Az alak arányai a vászon szélességének / magasságának törtrészében. */
 private data class Silhouette(
@@ -39,11 +39,10 @@ private fun BodyType.silhouette() = when (this) {
 }
 
 @Composable
-fun CarArt(car: Car, modifier: Modifier = Modifier) {
-    val bodyColor = Color(car.color)
-    val s = car.body.silhouette()
+fun CarArt(body: BodyType, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.outline) {
+    val s = body.silhouette()
     Canvas(modifier.aspectRatio(1.9f)) {
-        drawCar(s, bodyColor)
+        drawCar(s, color)
     }
 }
 

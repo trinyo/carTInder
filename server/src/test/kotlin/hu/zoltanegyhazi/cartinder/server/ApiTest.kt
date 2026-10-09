@@ -344,6 +344,19 @@ class ApiTest {
     }
 
     @Test
+    fun editingKeepsOpenerWhenLeftBlank() = apiTest {
+        val seller = register("seller@example.com")
+        val buyer = register("buyer@example.com")
+        val listing: ListingDto = post("/api/listings", seller.token, sampleListing().copy(opener = "Szia, nézd meg!")).body()
+        put("/api/listings/${listing.id}", seller.token, sampleListing(price = 999_000))
+
+        swipe(buyer.token, listing.id, SwipeDirection.RIGHT)
+        val like = get("/api/likes", seller.token).body<List<IncomingLikeDto>>().single()
+        val match: MatchDto = post("/api/likes/${like.id}/accept", seller.token).body()
+        assertEquals("Szia, nézd meg!", match.lastMessage?.text)
+    }
+
+    @Test
     fun listingValidation() = apiTest {
         val seller = register("seller@example.com")
         assertEquals(HttpStatusCode.BadRequest, post("/api/listings", seller.token, sampleListing().copy(year = 1850)).status)

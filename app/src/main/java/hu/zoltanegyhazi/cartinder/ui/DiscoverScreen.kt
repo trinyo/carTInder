@@ -22,11 +22,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -55,12 +57,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import hu.zoltanegyhazi.cartinder.CarTinderViewModel
 import hu.zoltanegyhazi.cartinder.R
-import hu.zoltanegyhazi.cartinder.data.AppState
-import hu.zoltanegyhazi.cartinder.data.Car
 import hu.zoltanegyhazi.cartinder.data.SwipeDirection
+import hu.zoltanegyhazi.cartinder.data.api.ListingDto
 import hu.zoltanegyhazi.cartinder.data.formatHuf
 import hu.zoltanegyhazi.cartinder.data.formatKm
+import hu.zoltanegyhazi.cartinder.data.title
 import hu.zoltanegyhazi.cartinder.ui.theme.LikeGreen
 import hu.zoltanegyhazi.cartinder.ui.theme.NopeRed
 import hu.zoltanegyhazi.cartinder.ui.theme.SuperBlue
@@ -92,8 +95,8 @@ private class SwipeCardState {
 }
 
 @Composable
-fun DiscoverScreen(state: AppState, onOpenProfile: () -> Unit, modifier: Modifier = Modifier) {
-    val deck = state.deck
+fun DiscoverScreen(vm: CarTinderViewModel, onOpenProfile: () -> Unit, modifier: Modifier = Modifier) {
+    val deck = vm.feed
     val scope = rememberCoroutineScope()
 
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -105,7 +108,7 @@ fun DiscoverScreen(state: AppState, onOpenProfile: () -> Unit, modifier: Modifie
             if (top != null && !cardState.busy) {
                 scope.launch {
                     cardState.fling(dir, width, height)
-                    state.swipe(top, dir)
+                    vm.swipe(top, dir)
                 }
             }
         }
@@ -113,9 +116,16 @@ fun DiscoverScreen(state: AppState, onOpenProfile: () -> Unit, modifier: Modifie
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             Logo(Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp))
 
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // Fekvő nézetben és tableten se nyúljon szét a kártya.
+            Box(Modifier.weight(1f).widthIn(max = 520.dp).fillMaxWidth().align(Alignment.CenterHorizontally)) {
                 if (top == null) {
-                    EmptyDeck(onOpenProfile, onReset = state::reset, Modifier.align(Alignment.Center))
+                    EmptyDeck(
+                        loading = vm.feedLoading,
+                        error = vm.feedError,
+                        onOpenProfile = onOpenProfile,
+                        onRefresh = { vm.refreshFeed() },
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 } else {
                     deck.getOrNull(1)?.let { next ->
                         key(next.id) {
@@ -175,7 +185,7 @@ fun DiscoverScreen(state: AppState, onOpenProfile: () -> Unit, modifier: Modifie
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RoundAction(R.drawable.ic_undo, "Visszavonás", Color(0xFFFFB300), 48.dp, state.canUndo) { state.undo() }
+                RoundAction(R.drawable.ic_undo, "Visszavonás", Color(0xFFFFB300), 48.dp, vm.undoable > 0) { vm.undo() }
                 RoundAction(R.drawable.ic_close, "Nem kell", NopeRed, 64.dp, top != null) { swipe(SwipeDirection.LEFT) }
                 RoundAction(R.drawable.ic_star, "Szuper like", SuperBlue, 52.dp, top != null) { swipe(SwipeDirection.UP) }
                 RoundAction(R.drawable.ic_heart, "Tetszik", LikeGreen, 64.dp, top != null) { swipe(SwipeDirection.RIGHT) }
@@ -204,7 +214,7 @@ fun Logo(modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CarCard(car: Car, modifier: Modifier = Modifier, overlay: @Composable BoxScope.() -> Unit = {}) {
+fun CarCard(car: ListingDto, modifier: Modifier = Modifier, overlay: @Composable BoxScope.() -> Unit = {}) {
     Card(
         modifier,
         shape = RoundedCornerShape(24.dp),
@@ -214,8 +224,10 @@ fun CarCard(car: Car, modifier: Modifier = Modifier, overlay: @Composable BoxSco
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    CarPhoto(car, Modifier.fillMaxSize(), placeholderPadding = 20.dp)
-                    Pill("📍 ${car.distanceKm} km-re", Modifier.align(Alignment.TopEnd).padding(14.dp))
+                    CarPhoto(car, Modifier.fillMaxSize(), placeholderPadding = 20.dp, showCredit = true)
+                    if (car.distanceKm > 0) {
+                        Pill("📍 ${car.distanceKm} km-re", Modifier.align(Alignment.TopEnd).padding(14.dp))
+                    }
                 }
                 Column(Modifier.padding(20.dp)) {
                     Row(verticalAlignment = Alignment.Bottom) {
@@ -247,6 +259,12 @@ fun CarCard(car: Car, modifier: Modifier = Modifier, overlay: @Composable BoxSco
                         SpecChip(car.body.label)
                         SpecChip(car.city)
                     }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Eladó: ${car.sellerName}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Spacer(Modifier.height(10.dp))
                     Text(
                         car.bio,
@@ -336,26 +354,44 @@ private fun RoundAction(
 }
 
 @Composable
-private fun EmptyDeck(onOpenProfile: () -> Unit, onReset: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyDeck(
+    loading: Boolean,
+    error: String?,
+    onOpenProfile: () -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("🚗💨", fontSize = 64.sp)
-        Spacer(Modifier.height(12.dp))
-        Text(
-            "Elfogytak az autók a környéken",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Lazíts a szűrőkön, vagy kezdd elölről – hátha valaki meggondolta magát.",
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = onOpenProfile) { Text("Szűrők") }
-        Spacer(Modifier.height(4.dp))
-        TextButton(onClick = onReset) { Text("Újrakezdés") }
+        when {
+            loading -> CircularProgressIndicator()
+            error != null -> {
+                Text("📡", fontSize = 64.sp)
+                Spacer(Modifier.height(12.dp))
+                Text(error, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onRefresh) { Text("Újra") }
+            }
+            else -> {
+                Text("🚗💨", fontSize = 64.sp)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Elfogytak az autók a környéken",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Lazíts a szűrőkön, vagy nézz vissza később – folyamatosan jönnek az új hirdetések.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onOpenProfile) { Text("Szűrők") }
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onRefresh) { Text("Frissítés") }
+            }
+        }
     }
 }
